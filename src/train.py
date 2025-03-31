@@ -41,9 +41,9 @@ class GetMask(object):
         self.k = k
         self.nfolds = nfolds
 
-    def __call__(self, sample):
-        sample = sample['image']
-        c, h, w = sample.shape
+    def __call__(self, y):
+        y = y['image']
+        c, h, w = y.shape
         assert h % self.k == 0
         assert w % self.k == 0
         hk = h // self.k
@@ -54,7 +54,8 @@ class GetMask(object):
         mask = mask.reshape(hk, wk)
         mask = np.repeat(mask, self.k, axis=0)
         mask = np.repeat(mask, self.k, axis=1)
-        return {'image': sample, 'mask': mask}
+        x = np.where(mask[np.newaxis], 0, y)
+        return {'image': x, 'label': y, 'mask': mask}
 
     
 def get_pcb_loaders(train_images, valid_images):
@@ -94,7 +95,7 @@ def train_pcb():
         in_channels=3,
         out_channels=3,
         channels=(48, 64, 80, 80),
-        strides=(2, 2),
+        strides=(2, 2, 1),
         num_res_units=1,
         lr=1e-3,
     )
@@ -107,7 +108,7 @@ def train_pcb():
     train_images = [{'image': all_images[i]} for i in train_idx]
     valid_images = [{'image': all_images[i]} for i in valid_idx]
     train_loader, valid_loader = get_pcb_loaders(train_images, valid_images)
-    # x = next(iter(train_loader))  # check
+    # sample = next(iter(train_loader))  # check
     model = Model(ARGS)
     torch.set_float32_matmul_precision('medium')
     checkpoint = pl.callbacks.ModelCheckpoint(

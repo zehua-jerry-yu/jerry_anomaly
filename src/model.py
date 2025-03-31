@@ -5,7 +5,12 @@ import lightning.pytorch as pl
 
 
 def masked_mse_loss(y_hat, y, mask):
-    return torch.sum(torch.square(y[mask] - y_hat[mask]))
+    y = torch.moveaxis(y, 1, 0)
+    y = y.reshape(y.shape[0], -1)
+    y_hat = torch.moveaxis(y_hat, 1, 0)
+    y_hat = y_hat.reshape(y_hat.shape[0], -1)
+    mask = mask.flatten()
+    return torch.mean(torch.square(y[:, mask] - y_hat[:, mask]))
 
 
 class Model(pl.LightningModule):
@@ -57,7 +62,7 @@ class Model(pl.LightningModule):
         return {'val_loss': loss}
 
     def on_validation_epoch_end(self):
-        loss_per_epoch = self.val_loss/self.num_val_batch
+        loss_per_epoch = self.valid_loss/self.num_val_batch
         print(f"Epoch {self.current_epoch} - Average Val Loss: {loss_per_epoch:.4f}")
         self.log('val_loss', loss_per_epoch, prog_bar=False, sync_dist=False)
         self.valid_loss = 0
