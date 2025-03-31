@@ -16,6 +16,7 @@ from monai.transforms import (
     RandRotate90d, 
     NormalizeIntensityd,
     RandCropByLabelClassesd,
+    Resized,
 )
 
 
@@ -45,11 +46,11 @@ class GetMask(object):
         c, h, w = sample.shape
         assert h % self.k == 0
         assert w % self.k == 0
-        hk = h / self.k
-        wk = w / self.k
-        mask = np.full((hk * wk,), False, dtype=np.bool)
+        hk = h // self.k
+        wk = w // self.k
+        mask = np.full((hk * wk,), False, dtype=bool)
         mask[:int(hk * wk / self.nfolds)] = True
-        mask = np.permutation(mask)
+        mask = np.random.permutation(mask)
         mask = mask.reshape(hk, wk)
         mask = np.repeat(mask, self.k, axis=0)
         mask = np.repeat(mask, self.k, axis=1)
@@ -63,6 +64,7 @@ def get_pcb_loaders(train_images, valid_images):
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
         # Orientationd(keys=["image", "label"], axcodes="RAS"),
+        Resized(spatial_size=(1000, 1312), size_mode='all', keys="image"),
         GetMask(k=4, nfolds=5)
     ])
     train_ds = Dataset(data=train_images, transform=transforms)
@@ -102,9 +104,10 @@ def train_pcb():
     n = len(all_images)
     train_idx = np.arange(n)[:int(n * 0.8)]
     valid_idx = np.arange(n)[int(n * 0.8):]
-    train_images = [all_images[i] for i in train_idx]
-    valid_images = [all_images[i] for i in valid_idx]
+    train_images = [{'image': all_images[i]} for i in train_idx]
+    valid_images = [{'image': all_images[i]} for i in valid_idx]
     train_loader, valid_loader = get_pcb_loaders(train_images, valid_images)
+    # x = next(iter(train_loader))  # check
     model = Model(ARGS)
     torch.set_float32_matmul_precision('medium')
     checkpoint = pl.callbacks.ModelCheckpoint(
@@ -124,7 +127,7 @@ def train_pcb():
         devices=[0],
         num_nodes=1,
         log_every_n_steps=10,
-        enable_progress_bar=False,
+        enable_progress_bar=True,
         callbacks=[
             checkpoint, 
             early_stopping, 
