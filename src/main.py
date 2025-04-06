@@ -21,13 +21,15 @@ from monai.transforms import (
 )
 
 
-def get_pcb_images(normal_only):
+def get_pcb_images(normal):
     from PIL import Image
     PATH_DATA = "/root/autodl-tmp/kaggle/anomaly/pcb2/aligned"
     filenames = os.listdir(PATH_DATA)
     filenames = [f for f in filenames if f.endswith(".JPG")]
-    if normal_only:
+    if normal:
         filenames = [f for f in filenames if len(f) == 8]  # only normal samples
+    else:
+        filenames = [f for f in filenames if len(f) == 7]  # only anomalous
     all_images = []
     for filename in filenames:
         image = Image.open(os.path.join(PATH_DATA, filename))
@@ -74,7 +76,7 @@ def get_nonrandom_masks(h, w, k=40, nfolds=5):
     return masks
 
     
-def get_pcb_loaders(train_images, valid_images):
+def get_pcb_loaders(train_images, valid_images, use_mask):
     TRAIN_BATCH_SIZE = 16
     VALID_BATCH_SIZE = 64
 
@@ -82,8 +84,12 @@ def get_pcb_loaders(train_images, valid_images):
         NormalizeIntensityd(keys="image"),
         # Orientationd(keys=["image", "label"], axcodes="RAS"),
         Resized(spatial_size=(600, 1000), size_mode='all', keys="image"),
-        GetMask()
     ])
+    if use_mask:
+        transforms = Compose([
+            transforms,
+            GetMask()
+        ])
     train_ds = Dataset(data=train_images, transform=transforms)
     # TODO: validation should be non random. how??
     valid_ds = Dataset(data=valid_images, transform=transforms)
@@ -149,11 +155,11 @@ def train_pcb():
 
 
 def test_pcb():
-    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_2/checkpoints"
+    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_3/checkpoints"
     out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
     filenames, all_images = get_pcb_images(normal_only=False)
-    filenames = filenames[:5]
-    all_images = all_images[:5]
+    filenames = filenames[:20]
+    all_images = all_images[:20]
 
     h, w = (600, 1000)
     masks = get_nonrandom_masks(h=h, w=w)
@@ -193,10 +199,115 @@ def test_pcb():
                 from PIL import Image
                 img = Image.fromarray(y_pred, 'RGB')
                 img.save(os.path.join(out_path, f"{filename.split('.')[0]}_{epoch}.jpg"))
-                    
+
+    print(result)      
     import pdb; pdb.set_trace()
 
 
+def train_pcb_simple():
+    ARGS = DotDict(
+        spatial_dims=2,
+        in_channels=3,
+        out_channels=3,
+        channels=(48, 64, 80, 80),
+        strides=(2, 2, 1),
+        num_res_units=1,
+        lr=1e-3,
+    )
+    NUM_EPOCH = 10
+
+    _, all_images = get_pcb_images(normal=True)
+    n = len(all_images)
+    train_idx = np.arange(n)[:int(n * 0.8)]
+    valid_idx = np.arange(n)[int(n * 0.7): int(n * 0.8)]
+    train_images = [{'image': all_images[i]} for i in train_idx]
+    valid_images = [{'image': all_images[i]} for i in valid_idx]
+    train_loader, valid_loader = get_pcb_loaders(train_images, valid_images, use_mask=False)
+    model = ModelSimple(ARGS)
+    torch.set_float32_matmul_precision('medium')
+    checkpoint = pl.callbacks.ModelCheckpoint(
+        save_top_k=-1,  # save all
+        every_n_epochs=2,
+        monitor='val_loss', 
+        mode='min'
+    )
+    trainer = pl.Trainer(
+        max_epochs=NUM_EPOCH,
+        accelerator="gpu",
+        devices=[0],
+        num_nodes=1,
+        log_every_n_steps=10,
+        enable_progress_bar=True,
+        callbacks=[
+            checkpoint
+        ],
+        default_root_dir="/root/autodl-tmp/kaggle/anomaly/jerry_anomaly"
+    )
+    trainer.fit(model, train_loader, valid_loader)
+
+
+def test_pcb_simple():
+    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_0/checkpoints"
+    out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
+
+    # add normal images that were not in training
+    filenames, all_images = get_pcb_images(normal=True)
+    n = len(all_images)
+    test_idx = np.arange(n)[:int(n * 0.8):]
+    test_filenames = [filenames[i] for i in test_idx]
+    test_images = [{'image': all_images[i]} for i in test_idx]
+    # add all abnormal images
+    filenames, all_images = get_pcb_images(normal=False)
+    test_images += all_images
+    test_filenames += filenames
+
+    h, w = (600, 1000)
+    masks = get_nonrandom_masks(h=h, w=w)
+    transforms = Compose([
+        NormalizeIntensityd(keys="image"),
+        Resized(spatial_size=(h, w), size_mode='all', keys="image"),
+    ])
+
+    for model_path in os.listdir(model_paths):
+        epoch = model_path.split('-')[0]
+        model = Model.load_from_checkpoint(os.path.join(model_paths, model_path))
+        model.eval()
+        model.to("cuda")
+
+        result = pd.Series()
+        for filename, image in zip(filenames, all_images):
+            print(filename)
+            x = transforms({'image': image})  # add dim for batch
+            with torch.no_grad():
+                y_pred = torch.zeros_like(x['image'])
+                for i, mask in enumerate(masks):
+                    xx = x['image'].clone().detach()
+                    xx = torch.where(mask[None], 0, xx)
+                    xx = xx[None].to("cuda")
+                    out = model(xx)
+                    y_pred[:, mask] = out[0][:, mask].to("cpu")
+                loss = torch.mean(torch.square(y_pred - x['image']))
+                result[filename] = loss.item()
+                # inv transform the predicted picture then save as jpg
+                y_pred = y_pred.numpy()
+                y_pred = y_pred * image.std() + image.mean()
+                y_pred = y_pred.astype(int)
+                y_pred = np.maximum(y_pred, 0)
+                y_pred = np.minimum(y_pred, 255)
+                y_pred = y_pred.astype(np.uint8)
+                y_pred = np.moveaxis(y_pred, 0, 2)
+                from PIL import Image
+                img = Image.fromarray(y_pred, 'RGB')
+                img.save(os.path.join(out_path, f"{filename.split('.')[0]}_{epoch}.jpg"))
+
+    print(result)      
+    import pdb; pdb.set_trace()
+
+
+
 if __name__ == "__main__":
-    train_pcb()
+    # train_pcb()
     # test_pcb()
+    # "simple" means input and output are same image
+    # train_pcb_simple()
+    test_pcb_simple()

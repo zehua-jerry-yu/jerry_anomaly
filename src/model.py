@@ -70,3 +70,62 @@ class Model(pl.LightningModule):
     
     def configure_optimizers(self):
         return torch.optim.AdamW(self.parameters(), lr=self.hparams.args.lr)
+
+
+class ModelSimple(pl.LightningModule):
+    def __init__(self, args):
+    
+        super().__init__()
+        self.save_hyperparameters()
+        self.model = UNet(
+            spatial_dims=args.spatial_dims,
+            in_channels=args.in_channels,
+            out_channels=args.out_channels,
+            channels=args.channels,
+            strides=args.strides,
+            num_res_units=args.num_res_units,
+        )
+
+        self.train_loss = 0
+        self.valid_loss = 0
+        self.num_train_batch = 0
+        self.num_val_batch = 0
+
+    def forward(self, x):
+        return self.model(x)
+
+    def training_step(self, batch, batch_idx):
+        x = batch['image']
+        y = self(x)
+        loss = torch.mean(torch.square(x - y))
+        self.train_loss += loss
+        self.num_train_batch += 1
+        torch.cuda.empty_cache()
+        return loss
+
+    def on_train_epoch_end(self):
+        loss_per_epoch = self.train_loss/self.num_train_batch
+        print(f"Epoch {self.current_epoch} - Average Train Loss: {loss_per_epoch:.4f}")
+        self.log('train_loss', loss_per_epoch, prog_bar=False)
+        self.train_loss = 0
+        self.num_train_batch = 0
+    
+    def validation_step(self, batch, batch_idx):
+        with torch.no_grad(): # This ensures that gradients are not stored in memory
+            x = batch['image']
+            y = self(x)
+            loss = torch.mean(torch.square(x - y))
+            self.valid_loss += loss
+            self.num_val_batch += 1
+        torch.cuda.empty_cache()
+        return {'val_loss': loss}
+
+    def on_validation_epoch_end(self):
+        loss_per_epoch = self.valid_loss/self.num_val_batch
+        print(f"Epoch {self.current_epoch} - Average Val Loss: {loss_per_epoch:.4f}")
+        self.log('val_loss', loss_per_epoch, prog_bar=False, sync_dist=False)
+        self.valid_loss = 0
+        self.num_val_batch = 0
+    
+    def configure_optimizers(self):
+        return torch.optim.AdamW(self.parameters(), lr=self.hparams.args.lr)
