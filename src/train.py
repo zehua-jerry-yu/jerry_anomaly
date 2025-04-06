@@ -1,6 +1,7 @@
 from utils import *
 from model import *
 import numpy as np
+import pandas as pd
 import torch
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
@@ -25,14 +26,14 @@ def get_pcb_images():
     PATH_DATA = "/root/autodl-tmp/kaggle/anomaly/pcb2/mixed"
     filenames = os.listdir(PATH_DATA)
     filenames = [f for f in filenames if f.endswith(".JPG")]
-    filenames = [f for f in filenames if len(f) == 8]  # only normal samples
+    # filenames = [f for f in filenames if len(f) == 8]  # only normal samples
     all_images = []
     for filename in filenames:
         image = Image.open(os.path.join(PATH_DATA, filename))
         image = np.array(image)  # (H,W,C)
         image = np.moveaxis(image, 2, 0)  # (C,H,W)
         all_images.append(image)
-    return all_images
+    return filenames, all_images
     
 
 class GetMask(object):
@@ -56,6 +57,20 @@ class GetMask(object):
         mask = np.repeat(mask, self.k, axis=1)
         x = np.where(mask[np.newaxis], 0, y)
         return {'image': x, 'label': y, 'mask': mask}
+
+
+def get_nonrandom_masks(k, nfolds, h, w):
+    assert h % k == 0
+    assert w % k == 0
+    masks = []
+    for t in range(nfolds):
+        mask = np.full((h, w), False, dtype=bool)
+        for i in range(h // k):
+            for j in range(w // k):
+                if (i * (w // k) + j) % nfolds == t:
+                    mask[i * k: i * k + k, j * k: j * k + k] = True
+        masks.append(torch.from_numpy(mask))
+    return masks
 
     
 def get_pcb_loaders(train_images, valid_images):
@@ -99,11 +114,11 @@ def train_pcb():
         num_res_units=1,
         lr=1e-3,
     )
-    NUM_EPOCH = 1000
+    NUM_EPOCH = 20
 
-    all_images = get_pcb_images()
+    _, all_images = get_pcb_images()
     n = len(all_images)
-    train_idx = np.arange(n)[:int(n * 0.8)]
+    train_idx = np.arange(n)#[:int(n * 0.8)]
     valid_idx = np.arange(n)[int(n * 0.8):]
     train_images = [{'image': all_images[i]} for i in train_idx]
     valid_images = [{'image': all_images[i]} for i in valid_idx]
@@ -138,5 +153,37 @@ def train_pcb():
     trainer.fit(model, train_loader, valid_loader)
 
 
+def test_pcb():
+    model_path = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_0/checkpoints/epoch=19-step=300.ckpt"
+    model = Model.load_from_checkpoint(model_path)
+    model.eval()
+    model.to("cuda")
+    filenames, all_images = get_pcb_images()
+
+    h, w = (1000, 1312)
+    masks = get_nonrandom_masks(k=4, nfolds=5, h=h, w=w)
+    transforms = Compose([
+        NormalizeIntensityd(keys="image"),
+        Resized(spatial_size=(h, w), size_mode='all', keys="image"),
+    ])
+
+    result = pd.Series()
+    for filename, image in zip(filenames, all_images):
+        print(filename)
+        x = transforms({'image': image})  # add dim for batch
+        with torch.no_grad():
+            y_pred = torch.zeros_like(x['image'])
+            for i, mask in enumerate(masks):
+                xx = x['image'].clone().detach()
+                xx = torch.where(mask[None], 0, xx)
+                xx = xx[None].to("cuda")
+                out = model(xx)
+                y_pred[:, mask] = out[0][:, mask].to("cpu")
+            loss = torch.mean(torch.square(y_pred - x['image']))
+            result[filename] = loss.item()
+                
+    import pdb; pdb.set_trace()
+
+
 if __name__ == "__main__":
-    train_pcb()
+    test_pcb()
