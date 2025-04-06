@@ -21,12 +21,13 @@ from monai.transforms import (
 )
 
 
-def get_pcb_images():
+def get_pcb_images(normal_only):
     from PIL import Image
-    PATH_DATA = "/root/autodl-tmp/kaggle/anomaly/pcb2/mixed"
+    PATH_DATA = "/root/autodl-tmp/kaggle/anomaly/pcb2/aligned"
     filenames = os.listdir(PATH_DATA)
     filenames = [f for f in filenames if f.endswith(".JPG")]
-    # filenames = [f for f in filenames if len(f) == 8]  # only normal samples
+    if normal_only:
+        filenames = [f for f in filenames if len(f) == 8]  # only normal samples
     all_images = []
     for filename in filenames:
         image = Image.open(os.path.join(PATH_DATA, filename))
@@ -38,7 +39,7 @@ def get_pcb_images():
 
 class GetMask(object):
     # transform. given image, generate random mask.
-    def __init__(self, k, nfolds):
+    def __init__(self, k=40, nfolds=5):
         self.k = k
         self.nfolds = nfolds
 
@@ -59,7 +60,7 @@ class GetMask(object):
         return {'image': x, 'label': y, 'mask': mask}
 
 
-def get_nonrandom_masks(k, nfolds, h, w):
+def get_nonrandom_masks(h, w, k=40, nfolds=5):
     assert h % k == 0
     assert w % k == 0
     masks = []
@@ -80,8 +81,8 @@ def get_pcb_loaders(train_images, valid_images):
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
         # Orientationd(keys=["image", "label"], axcodes="RAS"),
-        Resized(spatial_size=(1000, 1312), size_mode='all', keys="image"),
-        GetMask(k=4, nfolds=5)
+        Resized(spatial_size=(600, 1000), size_mode='all', keys="image"),
+        GetMask()
     ])
     train_ds = Dataset(data=train_images, transform=transforms)
     # TODO: validation should be non random. how??
@@ -114,9 +115,9 @@ def train_pcb():
         num_res_units=1,
         lr=1e-3,
     )
-    NUM_EPOCH = 20
+    NUM_EPOCH = 100
 
-    _, all_images = get_pcb_images()
+    _, all_images = get_pcb_images(normal_only=True)
     n = len(all_images)
     train_idx = np.arange(n)#[:int(n * 0.8)]
     valid_idx = np.arange(n)[int(n * 0.8):]
@@ -127,15 +128,10 @@ def train_pcb():
     model = Model(ARGS)
     torch.set_float32_matmul_precision('medium')
     checkpoint = pl.callbacks.ModelCheckpoint(
-        save_last=True,
-        save_top_k=1, 
+        save_top_k=-1,  # save all
+        every_n_epochs=10,
         monitor='val_loss', 
         mode='min'
-    )
-    early_stopping = EarlyStopping(
-        monitor="val_loss", 
-        mode="min", 
-        patience=20
     )
     trainer = pl.Trainer(
         max_epochs=NUM_EPOCH,
@@ -145,8 +141,7 @@ def train_pcb():
         log_every_n_steps=10,
         enable_progress_bar=True,
         callbacks=[
-            checkpoint, 
-            early_stopping, 
+            checkpoint
         ],
         default_root_dir="/root/autodl-tmp/kaggle/anomaly/jerry_anomaly"
     )
@@ -154,36 +149,54 @@ def train_pcb():
 
 
 def test_pcb():
-    model_path = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_0/checkpoints/epoch=19-step=300.ckpt"
-    model = Model.load_from_checkpoint(model_path)
-    model.eval()
-    model.to("cuda")
-    filenames, all_images = get_pcb_images()
+    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_2/checkpoints"
+    out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
+    filenames, all_images = get_pcb_images(normal_only=False)
+    filenames = filenames[:5]
+    all_images = all_images[:5]
 
-    h, w = (1000, 1312)
-    masks = get_nonrandom_masks(k=4, nfolds=5, h=h, w=w)
+    h, w = (600, 1000)
+    masks = get_nonrandom_masks(h=h, w=w)
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
         Resized(spatial_size=(h, w), size_mode='all', keys="image"),
     ])
 
-    result = pd.Series()
-    for filename, image in zip(filenames, all_images):
-        print(filename)
-        x = transforms({'image': image})  # add dim for batch
-        with torch.no_grad():
-            y_pred = torch.zeros_like(x['image'])
-            for i, mask in enumerate(masks):
-                xx = x['image'].clone().detach()
-                xx = torch.where(mask[None], 0, xx)
-                xx = xx[None].to("cuda")
-                out = model(xx)
-                y_pred[:, mask] = out[0][:, mask].to("cpu")
-            loss = torch.mean(torch.square(y_pred - x['image']))
-            result[filename] = loss.item()
-                
+    for model_path in os.listdir(model_paths):
+        epoch = model_path.split('-')[0]
+        model = Model.load_from_checkpoint(os.path.join(model_paths, model_path))
+        model.eval()
+        model.to("cuda")
+
+        result = pd.Series()
+        for filename, image in zip(filenames, all_images):
+            print(filename)
+            x = transforms({'image': image})  # add dim for batch
+            with torch.no_grad():
+                y_pred = torch.zeros_like(x['image'])
+                for i, mask in enumerate(masks):
+                    xx = x['image'].clone().detach()
+                    xx = torch.where(mask[None], 0, xx)
+                    xx = xx[None].to("cuda")
+                    out = model(xx)
+                    y_pred[:, mask] = out[0][:, mask].to("cpu")
+                loss = torch.mean(torch.square(y_pred - x['image']))
+                result[filename] = loss.item()
+                # inv transform the predicted picture then save as jpg
+                y_pred = y_pred.numpy()
+                y_pred = y_pred * image.std() + image.mean()
+                y_pred = y_pred.astype(int)
+                y_pred = np.maximum(y_pred, 0)
+                y_pred = np.minimum(y_pred, 255)
+                y_pred = y_pred.astype(np.uint8)
+                y_pred = np.moveaxis(y_pred, 0, 2)
+                from PIL import Image
+                img = Image.fromarray(y_pred, 'RGB')
+                img.save(os.path.join(out_path, f"{filename.split('.')[0]}_{epoch}.jpg"))
+                    
     import pdb; pdb.set_trace()
 
 
 if __name__ == "__main__":
-    test_pcb()
+    train_pcb()
+    # test_pcb()
