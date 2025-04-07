@@ -83,7 +83,7 @@ def get_pcb_loaders(train_images, valid_images, use_mask):
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
         # Orientationd(keys=["image", "label"], axcodes="RAS"),
-        Resized(spatial_size=(600, 1000), size_mode='all', keys="image"),
+        Resized(spatial_size=(592, 992), size_mode='all', keys="image"),
     ])
     if use_mask:
         transforms = Compose([
@@ -157,11 +157,14 @@ def train_pcb():
 def test_pcb():
     model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_3/checkpoints"
     out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
+    for filename in os.listdir(out_path):
+        os.remove(os.path.join(out_path, filename))  # clear folder first
+
     filenames, all_images = get_pcb_images(normal_only=False)
     filenames = filenames[:20]
     all_images = all_images[:20]
 
-    h, w = (600, 1000)
+    h, w = (592, 992)
     masks = get_nonrandom_masks(h=h, w=w)
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
@@ -205,15 +208,6 @@ def test_pcb():
 
 
 def train_pcb_simple():
-    ARGS = DotDict(
-        spatial_dims=2,
-        in_channels=3,
-        out_channels=3,
-        channels=(48, 64, 80, 80),
-        strides=(2, 2, 1),
-        num_res_units=1,
-        lr=1e-3,
-    )
     NUM_EPOCH = 10
 
     _, all_images = get_pcb_images(normal=True)
@@ -223,7 +217,7 @@ def train_pcb_simple():
     train_images = [{'image': all_images[i]} for i in train_idx]
     valid_images = [{'image': all_images[i]} for i in valid_idx]
     train_loader, valid_loader = get_pcb_loaders(train_images, valid_images, use_mask=False)
-    model = ModelSimple(ARGS)
+    model = ModelSimple()
     torch.set_float32_matmul_precision('medium')
     checkpoint = pl.callbacks.ModelCheckpoint(
         save_top_k=-1,  # save all
@@ -249,47 +243,44 @@ def train_pcb_simple():
 def test_pcb_simple():
     model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_0/checkpoints"
     out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
+    # for filename in os.listdir(out_path):
+    #     os.remove(os.path.join(out_path, filename))  # clear folder first
 
     # add normal images that were not in training
     filenames, all_images = get_pcb_images(normal=True)
     n = len(all_images)
     test_idx = np.arange(n)[:int(n * 0.8):]
     test_filenames = [filenames[i] for i in test_idx]
-    test_images = [{'image': all_images[i]} for i in test_idx]
+    test_images = [all_images[i] for i in test_idx]
+    
     # add all abnormal images
     filenames, all_images = get_pcb_images(normal=False)
-    test_images += all_images
     test_filenames += filenames
+    test_images += all_images
 
-    h, w = (600, 1000)
-    masks = get_nonrandom_masks(h=h, w=w)
+    h, w = (592, 992)
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
         Resized(spatial_size=(h, w), size_mode='all', keys="image"),
     ])
 
-    for model_path in os.listdir(model_paths):
+    for model_path in os.listdir(model_paths)[:1]:
         epoch = model_path.split('-')[0]
-        model = Model.load_from_checkpoint(os.path.join(model_paths, model_path))
+        model = ModelSimple.load_from_checkpoint(os.path.join(model_paths, model_path))
         model.eval()
         model.to("cuda")
 
         result = pd.Series()
-        for filename, image in zip(filenames, all_images):
+        for filename, image in zip(test_filenames, test_images):
             print(filename)
             x = transforms({'image': image})  # add dim for batch
+            x = x['image'].to("cuda")
             with torch.no_grad():
-                y_pred = torch.zeros_like(x['image'])
-                for i, mask in enumerate(masks):
-                    xx = x['image'].clone().detach()
-                    xx = torch.where(mask[None], 0, xx)
-                    xx = xx[None].to("cuda")
-                    out = model(xx)
-                    y_pred[:, mask] = out[0][:, mask].to("cpu")
-                loss = torch.mean(torch.square(y_pred - x['image']))
+                y_pred = model(x[None])[0]
+                loss = torch.mean(torch.square(y_pred - x))
                 result[filename] = loss.item()
                 # inv transform the predicted picture then save as jpg
-                y_pred = y_pred.numpy()
+                y_pred = y_pred.cpu().numpy()
                 y_pred = y_pred * image.std() + image.mean()
                 y_pred = y_pred.astype(int)
                 y_pred = np.maximum(y_pred, 0)
@@ -300,7 +291,7 @@ def test_pcb_simple():
                 img = Image.fromarray(y_pred, 'RGB')
                 img.save(os.path.join(out_path, f"{filename.split('.')[0]}_{epoch}.jpg"))
 
-    print(result)      
+    print(result)
     import pdb; pdb.set_trace()
 
 
@@ -308,6 +299,8 @@ def test_pcb_simple():
 if __name__ == "__main__":
     # train_pcb()
     # test_pcb()
+
     # "simple" means input and output are same image
+    # using unet for this would make it learn identical transformation in 1 epoch
     # train_pcb_simple()
     test_pcb_simple()
