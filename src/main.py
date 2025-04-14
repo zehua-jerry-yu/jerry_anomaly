@@ -6,6 +6,7 @@ import torch
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 import os
+import cv2
 
 from monai.data import DataLoader, Dataset, CacheDataset, decollate_batch
 from monai.transforms import (
@@ -22,6 +23,21 @@ from monai.transforms import (
 
 
 def get_pcb_images(normal):
+
+    # load rect info from xml
+    import xml.etree.ElementTree as ET
+    tree = ET.parse('/root/autodl-tmp/kaggle/anomaly/pcb2/template/template.xml')
+    root = tree.getroot()
+    size = root.find('size')
+    width = int(size.find('width').text)
+    height = int(size.find('height').text)
+    for obj in root.findall('object'):
+        bndbox = obj.find('bndbox')
+        xmin = int(bndbox.find('xmin').text)
+        ymin = int(bndbox.find('ymin').text)
+        xmax = int(bndbox.find('xmax').text)
+        ymax = int(bndbox.find('ymax').text)
+
     from PIL import Image
     PATH_DATA = "/root/autodl-tmp/kaggle/anomaly/pcb2/aligned"
     filenames = os.listdir(PATH_DATA)
@@ -31,11 +47,32 @@ def get_pcb_images(normal):
     else:
         filenames = [f for f in filenames if len(f) == 7]  # only anomalous
     all_images = []
+
+    template = cv2.imread('/root/autodl-tmp/kaggle/anomaly/pcb2/template/template2.JPG', cv2.IMREAD_GRAYSCALE)
+    
     for filename in filenames:
+
+        # template matching
+        image = cv2.imread(os.path.join(PATH_DATA, filename), cv2.IMREAD_GRAYSCALE)
+        result = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)  # return idx in width, idx in height
+
         image = Image.open(os.path.join(PATH_DATA, filename))
         image = np.array(image)  # (H,W,C)
         image = np.moveaxis(image, 2, 0)  # (C,H,W)
+        image = image[:, max_loc[1]: max_loc[1] + template.shape[0], max_loc[0]: max_loc[0] + template.shape[1]]
+        # assert(image.shape[1] == height)
+        # assert(image.shape[2] == width)
+        # image = image[:, ymin: ymax + 1, xmin: xmax + 1]
         all_images.append(image)
+    
+    # # save the matched images for visualization
+    # for filename, image in zip(filenames, all_images):
+    #     from PIL import Image
+    #     x = np.moveaxis(image, 0, 2)
+    #     x = Image.fromarray(x, 'RGB')
+    #     x.save(os.path.join("/root/autodl-tmp/kaggle/anomaly/pcb2/matched", f"{filename}.jpg"))
+    
     return filenames, all_images
     
 
@@ -83,7 +120,7 @@ def get_pcb_loaders(train_images, valid_images, use_mask):
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
         # Orientationd(keys=["image", "label"], axcodes="RAS"),
-        Resized(spatial_size=(592, 992), size_mode='all', keys="image"),
+        Resized(spatial_size=(192, 224), size_mode='all', keys="image"),
     ])
     if use_mask:
         transforms = Compose([
@@ -164,7 +201,7 @@ def test_pcb():
     filenames = filenames[:20]
     all_images = all_images[:20]
 
-    h, w = (592, 992)
+    h, w = (192, 224)
     masks = get_nonrandom_masks(h=h, w=w)
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
@@ -241,30 +278,31 @@ def train_pcb_simple():
 
 
 def test_pcb_simple():
-    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_0/checkpoints"
+    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_1/checkpoints"
     out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
-    # for filename in os.listdir(out_path):
-    #     os.remove(os.path.join(out_path, filename))  # clear folder first
+    for filename in os.listdir(out_path):
+        os.remove(os.path.join(out_path, filename))  # clear folder first
 
     # add normal images that were not in training
-    filenames, all_images = get_pcb_images(normal=True)
+    normal_filenames, all_images = get_pcb_images(normal=True)
     n = len(all_images)
-    test_idx = np.arange(n)[:int(n * 0.8):]
-    test_filenames = [filenames[i] for i in test_idx]
+    test_idx = np.arange(n)[int(n * 0.8):]
+    normal_filenames = [normal_filenames[i] for i in test_idx]
+    test_filenames = [i for i in normal_filenames]
     test_images = [all_images[i] for i in test_idx]
     
     # add all abnormal images
-    filenames, all_images = get_pcb_images(normal=False)
-    test_filenames += filenames
+    anomaly_filenames, all_images = get_pcb_images(normal=False)
+    test_filenames += anomaly_filenames
     test_images += all_images
 
-    h, w = (592, 992)
+    h, w = (192, 224)
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
         Resized(spatial_size=(h, w), size_mode='all', keys="image"),
     ])
 
-    for model_path in os.listdir(model_paths)[:1]:
+    for model_path in os.listdir(model_paths)[-1:]:
         epoch = model_path.split('-')[0]
         model = ModelSimple.load_from_checkpoint(os.path.join(model_paths, model_path))
         model.eval()
@@ -291,6 +329,9 @@ def test_pcb_simple():
                 img = Image.fromarray(y_pred, 'RGB')
                 img.save(os.path.join(out_path, f"{filename.split('.')[0]}_{epoch}.jpg"))
 
+    result_normal = result.loc[normal_filenames]
+    result_anomaly = result.loc[anomaly_filenames]
+    result.sort_values(inplace=True)
     print(result)
     import pdb; pdb.set_trace()
 
