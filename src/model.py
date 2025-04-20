@@ -72,32 +72,6 @@ class Model(pl.LightningModule):
         return torch.optim.AdamW(self.parameters(), lr=self.hparams.args.lr)
 
 
-# class ConvAutoencoder(nn.Module):
-#     def __init__(self):
-#         super(ConvAutoencoder, self).__init__()
-
-#         IMAGE_SIZE = 3 * 192 * 224  # input image is 3 * 192 * 224
-#         # Encoder
-#         self.encoder = nn.Sequential(
-#             nn.Linear(IMAGE_SIZE, 128),
-#             nn.ReLU(),
-#             nn.Linear(128, 32),
-#             nn.ReLU()
-#         )
-#         # Decoder
-#         self.decoder = nn.Sequential(
-#             nn.Linear(32, 128),
-#             nn.ReLU(),
-#             nn.Linear(128, IMAGE_SIZE)
-#         )
-
-#     def forward(self, x):
-#         z = self.encoder(x.view(x.size(0), -1))
-#         x_recon = torch.reshape(self.decoder(z), x.shape)
-#         return x_recon
-
-
-
 class LightConvAutoencoder(nn.Module):
     def __init__(self):
         super(LightConvAutoencoder, self).__init__()
@@ -107,10 +81,12 @@ class LightConvAutoencoder(nn.Module):
         self.encoder_conv = nn.Sequential(
             nn.Conv2d(3, 16, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
         )
         
         self.encoder_fc = nn.Sequential(
-            nn.Linear(16 * self.IMAGE_SHAPE[1] * self.IMAGE_SHAPE[2] // 4, 256),
+            nn.Linear(32 * self.IMAGE_SHAPE[1] * self.IMAGE_SHAPE[2] // 16, 256),
             nn.ReLU(),
             nn.Linear(256, 64),  # bottleneck
         )
@@ -118,11 +94,13 @@ class LightConvAutoencoder(nn.Module):
         self.decoder_fc = nn.Sequential(
             nn.Linear(64, 256),
             nn.ReLU(),
-            nn.Linear(256, 16 * self.IMAGE_SHAPE[1] * self.IMAGE_SHAPE[2] // 4),
+            nn.Linear(256, 32 * self.IMAGE_SHAPE[1] * self.IMAGE_SHAPE[2] // 16),
             nn.ReLU()
         )
         
         self.decoder_conv = nn.Sequential(
+            nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
             nn.ConvTranspose2d(16, 3, kernel_size=4, stride=2, padding=1),
         )
 
@@ -135,7 +113,7 @@ class LightConvAutoencoder(nn.Module):
 
         # Decoder
         x = self.decoder_fc(x)
-        x = x.view(batch_size, 16, self.IMAGE_SHAPE[1] // 2, self.IMAGE_SHAPE[2] // 2)
+        x = x.view(batch_size, 32, self.IMAGE_SHAPE[1] // 4, self.IMAGE_SHAPE[2] // 4)
         x = self.decoder_conv(x)
         return x
 

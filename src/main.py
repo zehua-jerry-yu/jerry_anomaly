@@ -278,7 +278,7 @@ def train_pcb_simple():
 
 
 def test_pcb_simple():
-    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_4/checkpoints"
+    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_0/checkpoints"
     out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
     for filename in os.listdir(out_path):
         os.remove(os.path.join(out_path, filename))  # clear folder first
