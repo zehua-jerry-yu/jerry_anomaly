@@ -98,33 +98,46 @@ class Model(pl.LightningModule):
 
 
 
-class ConvAutoencoder(nn.Module):
+class LightConvAutoencoder(nn.Module):
     def __init__(self):
-        super(ConvAutoencoder, self).__init__()
+        super(LightConvAutoencoder, self).__init__()
+        
+        self.IMAGE_SHAPE = (3, 192, 224)
 
-        # Encoder
-        self.encoder = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
+        self.encoder_conv = nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
         )
-
-        # Decoder
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),
+        
+        self.encoder_fc = nn.Sequential(
+            nn.Linear(16 * self.IMAGE_SHAPE[1] * self.IMAGE_SHAPE[2] // 4, 256),
             nn.ReLU(),
-            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.Linear(256, 64),  # bottleneck
+        )
+        
+        self.decoder_fc = nn.Sequential(
+            nn.Linear(64, 256),
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 3, kernel_size=4, stride=2, padding=1),
+            nn.Linear(256, 16 * self.IMAGE_SHAPE[1] * self.IMAGE_SHAPE[2] // 4),
+            nn.ReLU()
+        )
+        
+        self.decoder_conv = nn.Sequential(
+            nn.ConvTranspose2d(16, 3, kernel_size=4, stride=2, padding=1),
         )
 
     def forward(self, x):
-        z = self.encoder(x)
-        x_recon = self.decoder(z)
-        return x_recon
+        # Encoder
+        x = self.encoder_conv(x)
+        batch_size = x.size(0)
+        x = x.view(batch_size, -1)
+        x = self.encoder_fc(x)
+
+        # Decoder
+        x = self.decoder_fc(x)
+        x = x.view(batch_size, 16, self.IMAGE_SHAPE[1] // 2, self.IMAGE_SHAPE[2] // 2)
+        x = self.decoder_conv(x)
+        return x
 
 
 class ModelSimple(pl.LightningModule):
@@ -132,7 +145,7 @@ class ModelSimple(pl.LightningModule):
     
         super().__init__()
         self.save_hyperparameters()
-        self.model = ConvAutoencoder()
+        self.model = LightConvAutoencoder()
 
         self.train_loss = 0
         self.valid_loss = 0

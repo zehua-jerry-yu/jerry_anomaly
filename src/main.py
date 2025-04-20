@@ -343,5 +343,5 @@ if __name__ == "__main__":
 
     # "simple" means input and output are same image
     # using unet for this would make it learn identical transformation in 1 epoch
-    train_pcb_simple()
-    # test_pcb_simple()
+    # train_pcb_simple()
+    test_pcb_simple()
