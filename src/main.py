@@ -66,12 +66,12 @@ def get_pcb_images(normal):
         # image = image[:, ymin: ymax + 1, xmin: xmax + 1]
         all_images.append(image)
     
-    # # save the matched images for visualization
-    # for filename, image in zip(filenames, all_images):
-    #     from PIL import Image
-    #     x = np.moveaxis(image, 0, 2)
-    #     x = Image.fromarray(x, 'RGB')
-    #     x.save(os.path.join("/root/autodl-tmp/kaggle/anomaly/pcb2/matched", f"{filename}.jpg"))
+    # save the matched images for visualization
+    for filename, image in zip(filenames, all_images):
+        from PIL import Image
+        x = np.moveaxis(image, 0, 2)
+        x = Image.fromarray(x, 'RGB')
+        x.save(os.path.join("/root/autodl-tmp/kaggle/anomaly/pcb2/matched", f"{filename}.jpg"))
     
     return filenames, all_images
     
@@ -278,7 +278,7 @@ def train_pcb_simple():
 
 
 def test_pcb_simple():
-    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_1/checkpoints"
+    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_4/checkpoints"
     out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
     for filename in os.listdir(out_path):
         os.remove(os.path.join(out_path, filename))  # clear folder first
@@ -343,5 +343,5 @@ if __name__ == "__main__":
 
     # "simple" means input and output are same image
     # using unet for this would make it learn identical transformation in 1 epoch
-    # train_pcb_simple()
-    test_pcb_simple()
+    train_pcb_simple()
+    # test_pcb_simple()

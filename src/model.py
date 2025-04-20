@@ -72,31 +72,53 @@ class Model(pl.LightningModule):
         return torch.optim.AdamW(self.parameters(), lr=self.hparams.args.lr)
 
 
+# class ConvAutoencoder(nn.Module):
+#     def __init__(self):
+#         super(ConvAutoencoder, self).__init__()
+
+#         IMAGE_SIZE = 3 * 192 * 224  # input image is 3 * 192 * 224
+#         # Encoder
+#         self.encoder = nn.Sequential(
+#             nn.Linear(IMAGE_SIZE, 128),
+#             nn.ReLU(),
+#             nn.Linear(128, 32),
+#             nn.ReLU()
+#         )
+#         # Decoder
+#         self.decoder = nn.Sequential(
+#             nn.Linear(32, 128),
+#             nn.ReLU(),
+#             nn.Linear(128, IMAGE_SIZE)
+#         )
+
+#     def forward(self, x):
+#         z = self.encoder(x.view(x.size(0), -1))
+#         x_recon = torch.reshape(self.decoder(z), x.shape)
+#         return x_recon
+
+
+
 class ConvAutoencoder(nn.Module):
     def __init__(self):
         super(ConvAutoencoder, self).__init__()
 
         # Encoder
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 64, 64]
+            nn.Conv2d(3, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 32, 32]
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),  # [B, 256, 16, 16]
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1),  # [B, 512, 8, 8]
-            nn.ReLU()
         )
 
         # Decoder
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # [B, 256, 16, 16]
+            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 32, 32]
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),   # [B, 64, 64, 64]
-            nn.ReLU(),
-            nn.ConvTranspose2d(64, 3, kernel_size=4, stride=2, padding=1),     # [B, 3, 128, 128]
+            nn.ConvTranspose2d(64, 3, kernel_size=4, stride=2, padding=1),
         )
 
     def forward(self, x):
