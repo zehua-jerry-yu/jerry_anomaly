@@ -88,11 +88,11 @@ class LightConvAutoencoder(nn.Module):
         self.encoder_fc = nn.Sequential(
             nn.Linear(32 * self.IMAGE_SHAPE[1] * self.IMAGE_SHAPE[2] // 16, 256),
             nn.ReLU(),
-            nn.Linear(256, 64),  # bottleneck
+            nn.Linear(256, 128),  # bottleneck
         )
         
         self.decoder_fc = nn.Sequential(
-            nn.Linear(64, 256),
+            nn.Linear(128, 256),
             nn.ReLU(),
             nn.Linear(256, 32 * self.IMAGE_SHAPE[1] * self.IMAGE_SHAPE[2] // 16),
             nn.ReLU()
