@@ -7,6 +7,7 @@ import lightning.pytorch as pl
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 import os
 import cv2
+import timm
 
 from monai.data import DataLoader, Dataset, CacheDataset, decollate_batch
 from monai.transforms import (
@@ -244,7 +245,7 @@ def test_pcb():
     import pdb; pdb.set_trace()
 
 
-def train_pcb_simple():
+def train_pcb_simple_unsupervised():
     NUM_EPOCH = 10
 
     _, all_images = get_pcb_images(normal=True)
@@ -277,7 +278,7 @@ def train_pcb_simple():
     trainer.fit(model, train_loader, valid_loader)
 
 
-def test_pcb_simple():
+def test_pcb_simple_unsupervised():
     model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_0/checkpoints"
     out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
     for filename in os.listdir(out_path):
@@ -336,6 +337,103 @@ def test_pcb_simple():
     import pdb; pdb.set_trace()
 
 
+def get_supervised_pcb_loaders(samples):
+    BATCH_SIZE = 16
+
+    transforms = Compose([
+        NormalizeIntensityd(keys="image"),
+        Resized(spatial_size=(192, 224), size_mode='all', keys="image"),
+    ])
+    ds = Dataset(data=samples, transform=transforms)
+
+    loader = DataLoader(
+        ds,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=32,
+        pin_memory=True
+    )
+    return loader
+
+
+def pcb_simple_supervised():
+    model_name = "efficientnet_b0"  # Lightweight and good
+    model = timm.create_model(model_name, pretrained=True, num_classes=0)  # num_classes=0 → feature extractor
+    model = model.to('cuda')
+    model.eval()
+
+    _, normal_images = get_pcb_images(normal=True)
+    _, anomalous_images = get_pcb_images(normal=False)
+    train_samples = []
+    for image in normal_images:
+        train_samples.append({
+            'image': image,
+            'label': False
+        })
+    for image in anomalous_images:
+        train_samples.append({
+            'image': image,
+            'label': True
+        })
+
+    train_loader = get_supervised_pcb_loaders(train_samples)
+
+    features = []
+    labels = []
+    with torch.no_grad():
+        for batch in train_loader:
+            imgs = batch['image']
+            lbls = batch['label']
+            imgs = imgs.to('cuda')
+            feats = model(imgs)  # Shape: [batch, feature_dim]
+            features.append(feats.cpu().numpy())
+            labels.append(lbls.cpu().numpy())
+    X = np.concatenate(features)
+    y = np.concatenate(labels)
+
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.metrics import (
+        classification_report,
+        confusion_matrix,
+        roc_auc_score,
+        average_precision_score,
+        log_loss,
+        brier_score_loss
+    )
+    skf = StratifiedKFold(n_splits=6, shuffle=True, random_state=42)
+
+    all_true, all_pred, all_probs = [], [], []
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+        print(f"\n=== Fold {fold}/6 ===")
+        # Extract features
+        X_train, y_train = X[train_idx], y[train_idx]
+        X_val,   y_val   = X[val_idx], y[val_idx]
+
+        # Train classifier
+        clf = LogisticRegression(class_weight='balanced', max_iter=1000)
+        clf.fit(X_train, y_train)
+
+        # Predict on validation fold
+        y_pred = clf.predict(X_val)
+        y_prob = clf.predict_proba(X_val)
+
+        # Accumulate
+        all_true.extend(y_val)
+        all_pred.extend(y_pred)
+        all_probs.extend(y_prob[:, 1])
+
+    print("\n=== Final Classification Report ===")
+    print(classification_report(all_true, all_pred))
+
+    print("=== Final Confusion Matrix ===")
+    print(confusion_matrix(all_true, all_pred))
+    print(f"ROC AUC:           {roc_auc_score(all_true, all_probs):.4f}")
+    print(f"PR AUC:            {average_precision_score(all_true, all_probs):.4f}")
+    print(f"Log Loss:          {log_loss(all_true, all_probs):.4f}")
+    print(f"Brier Score:       {brier_score_loss(all_true, all_probs):.4f}")
+    import pdb; pdb.set_trace()
+
 
 if __name__ == "__main__":
     # train_pcb()
@@ -343,5 +441,8 @@ if __name__ == "__main__":
 
     # "simple" means input and output are same image
     # using unet for this would make it learn identical transformation in 1 epoch
-    # train_pcb_simple()
-    test_pcb_simple()
+
+    # train_pcb_simple_unsupervised()
+    # test_pcb_simple_unsupervised()
+
+    pcb_simple_supervised()
