@@ -362,22 +362,23 @@ def pcb_simple_supervised():
     model = model.to('cuda')
     model.eval()
 
-    _, normal_images = get_pcb_images(normal=True)
-    _, anomalous_images = get_pcb_images(normal=False)
     train_samples = []
-    for image in normal_images:
+    for filename, image in zip(*get_pcb_images(normal=True)):
         train_samples.append({
+            'filename': filename,
             'image': image,
             'label': False
         })
-    for image in anomalous_images:
+    for filename, image in zip(*get_pcb_images(normal=False)):
         train_samples.append({
+            'filename': filename,
             'image': image,
             'label': True
         })
 
     train_loader = get_supervised_pcb_loaders(train_samples)
 
+    filenames = []
     features = []
     labels = []
     with torch.no_grad():
@@ -386,8 +387,10 @@ def pcb_simple_supervised():
             lbls = batch['label']
             imgs = imgs.to('cuda')
             feats = model(imgs)  # Shape: [batch, feature_dim]
+            filenames.append(batch['filename'])
             features.append(feats.cpu().numpy())
             labels.append(lbls.cpu().numpy())
+    filenames = np.concatenate(filenames)
     X = np.concatenate(features)
     y = np.concatenate(labels)
 
@@ -403,7 +406,9 @@ def pcb_simple_supervised():
     )
     skf = StratifiedKFold(n_splits=6, shuffle=True, random_state=42)
 
-    all_true, all_pred, all_probs = [], [], []
+    all_true = np.zeros(len(y))
+    all_pred = np.zeros(len(y))
+    all_probs = np.zeros(len(y))
     for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
         print(f"\n=== Fold {fold}/6 ===")
         # Extract features
@@ -419,9 +424,9 @@ def pcb_simple_supervised():
         y_prob = clf.predict_proba(X_val)
 
         # Accumulate
-        all_true.extend(y_val)
-        all_pred.extend(y_pred)
-        all_probs.extend(y_prob[:, 1])
+        all_true[val_idx] = y_val
+        all_pred[val_idx] = y_pred
+        all_probs[val_idx] = y_prob[:, 1]
 
     print("\n=== Final Classification Report ===")
     print(classification_report(all_true, all_pred))
@@ -432,6 +437,8 @@ def pcb_simple_supervised():
     print(f"PR AUC:            {average_precision_score(all_true, all_probs):.4f}")
     print(f"Log Loss:          {log_loss(all_true, all_probs):.4f}")
     print(f"Brier Score:       {brier_score_loss(all_true, all_probs):.4f}")
+
+    print(filenames[(all_true == 1) & ~(all_pred == 1)])
     import pdb; pdb.set_trace()
 
 
