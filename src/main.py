@@ -40,7 +40,7 @@ def get_pcb_images(normal):
         ymax = int(bndbox.find('ymax').text)
 
     from PIL import Image
-    PATH_DATA = "/root/autodl-tmp/kaggle/anomaly/pcb2/aligned"
+    PATH_DATA = "/root/autodl-tmp/kaggle/anomaly/Jerry_PCB2_FullTest/aligned"
     filenames = os.listdir(PATH_DATA)
     filenames = [f for f in filenames if f.endswith(".JPG")]
     if normal:
@@ -72,7 +72,7 @@ def get_pcb_images(normal):
         from PIL import Image
         x = np.moveaxis(image, 0, 2)
         x = Image.fromarray(x, 'RGB')
-        x.save(os.path.join("/root/autodl-tmp/kaggle/anomaly/pcb2/matched", f"{filename}.jpg"))
+        x.save(os.path.join("/root/autodl-tmp/kaggle/anomaly/Jerry_PCB2_FullTest/matched", f"{filename}.jpg"))
     
     return filenames, all_images
     
@@ -450,6 +450,6 @@ if __name__ == "__main__":
     # using unet for this would make it learn identical transformation in 1 epoch
 
     # train_pcb_simple_unsupervised()
-    # test_pcb_simple_unsupervised()
+    test_pcb_simple_unsupervised()
 
-    pcb_simple_supervised()
+    # pcb_simple_supervised()
