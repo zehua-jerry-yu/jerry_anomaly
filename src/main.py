@@ -54,17 +54,15 @@ def get_pcb_images(normal):
     for filename in filenames:
 
         # template matching
-        image = cv2.imread(os.path.join(PATH_DATA, filename), cv2.IMREAD_GRAYSCALE)
-        result = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)  # return idx in width, idx in height
+        # image = cv2.imread(os.path.join(PATH_DATA, filename), cv2.IMREAD_GRAYSCALE)
+        # result = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+        # min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)  # return idx in width, idx in height
 
         image = Image.open(os.path.join(PATH_DATA, filename))
         image = np.array(image)  # (H,W,C)
         image = np.moveaxis(image, 2, 0)  # (C,H,W)
-        image = image[:, max_loc[1]: max_loc[1] + template.shape[0], max_loc[0]: max_loc[0] + template.shape[1]]
-        # assert(image.shape[1] == height)
-        # assert(image.shape[2] == width)
-        # image = image[:, ymin: ymax + 1, xmin: xmax + 1]
+        # image = image[:, max_loc[1]: max_loc[1] + template.shape[0], max_loc[0]: max_loc[0] + template.shape[1]]
+
         all_images.append(image)
     
     # save the matched images for visualization
@@ -121,7 +119,7 @@ def get_pcb_loaders(train_images, valid_images, use_mask):
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
         # Orientationd(keys=["image", "label"], axcodes="RAS"),
-        Resized(spatial_size=(192, 224), size_mode='all', keys="image"),
+        Resized(spatial_size=(296, 488), size_mode='all', keys="image"),
     ])
     if use_mask:
         transforms = Compose([
@@ -149,104 +147,8 @@ def get_pcb_loaders(train_images, valid_images, use_mask):
     return train_loader, valid_loader
 
 
-def train_pcb():
-    ARGS = DotDict(
-        spatial_dims=2,
-        in_channels=3,
-        out_channels=3,
-        channels=(48, 64, 80, 80),
-        strides=(2, 2, 1),
-        num_res_units=1,
-        lr=1e-3,
-    )
-    NUM_EPOCH = 100
-
-    _, all_images = get_pcb_images(normal_only=True)
-    n = len(all_images)
-    train_idx = np.arange(n)#[:int(n * 0.8)]
-    valid_idx = np.arange(n)[int(n * 0.8):]
-    train_images = [{'image': all_images[i]} for i in train_idx]
-    valid_images = [{'image': all_images[i]} for i in valid_idx]
-    train_loader, valid_loader = get_pcb_loaders(train_images, valid_images)
-    # sample = next(iter(train_loader))  # check
-    model = Model(ARGS)
-    torch.set_float32_matmul_precision('medium')
-    checkpoint = pl.callbacks.ModelCheckpoint(
-        save_top_k=-1,  # save all
-        every_n_epochs=10,
-        monitor='val_loss', 
-        mode='min'
-    )
-    trainer = pl.Trainer(
-        max_epochs=NUM_EPOCH,
-        accelerator="gpu",
-        devices=[0],
-        num_nodes=1,
-        log_every_n_steps=10,
-        enable_progress_bar=True,
-        callbacks=[
-            checkpoint
-        ],
-        default_root_dir="/root/autodl-tmp/kaggle/anomaly/jerry_anomaly"
-    )
-    trainer.fit(model, train_loader, valid_loader)
-
-
-def test_pcb():
-    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_3/checkpoints"
-    out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
-    for filename in os.listdir(out_path):
-        os.remove(os.path.join(out_path, filename))  # clear folder first
-
-    filenames, all_images = get_pcb_images(normal_only=False)
-    filenames = filenames[:20]
-    all_images = all_images[:20]
-
-    h, w = (192, 224)
-    masks = get_nonrandom_masks(h=h, w=w)
-    transforms = Compose([
-        NormalizeIntensityd(keys="image"),
-        Resized(spatial_size=(h, w), size_mode='all', keys="image"),
-    ])
-
-    for model_path in os.listdir(model_paths):
-        epoch = model_path.split('-')[0]
-        model = Model.load_from_checkpoint(os.path.join(model_paths, model_path))
-        model.eval()
-        model.to("cuda")
-
-        result = pd.Series()
-        for filename, image in zip(filenames, all_images):
-            print(filename)
-            x = transforms({'image': image})  # add dim for batch
-            with torch.no_grad():
-                y_pred = torch.zeros_like(x['image'])
-                for i, mask in enumerate(masks):
-                    xx = x['image'].clone().detach()
-                    xx = torch.where(mask[None], 0, xx)
-                    xx = xx[None].to("cuda")
-                    out = model(xx)
-                    y_pred[:, mask] = out[0][:, mask].to("cpu")
-                loss = torch.mean(torch.square(y_pred - x['image']))
-                result[filename] = loss.item()
-                # inv transform the predicted picture then save as jpg
-                y_pred = y_pred.numpy()
-                y_pred = y_pred * image.std() + image.mean()
-                y_pred = y_pred.astype(int)
-                y_pred = np.maximum(y_pred, 0)
-                y_pred = np.minimum(y_pred, 255)
-                y_pred = y_pred.astype(np.uint8)
-                y_pred = np.moveaxis(y_pred, 0, 2)
-                from PIL import Image
-                img = Image.fromarray(y_pred, 'RGB')
-                img.save(os.path.join(out_path, f"{filename.split('.')[0]}_{epoch}.jpg"))
-
-    print(result)      
-    import pdb; pdb.set_trace()
-
-
 def train_pcb_simple_unsupervised():
-    NUM_EPOCH = 10
+    NUM_EPOCH = 20
 
     _, all_images = get_pcb_images(normal=True)
     n = len(all_images)
@@ -279,7 +181,7 @@ def train_pcb_simple_unsupervised():
 
 
 def test_pcb_simple_unsupervised():
-    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_0/checkpoints"
+    model_paths = "/root/autodl-tmp/kaggle/anomaly/jerry_anomaly/lightning_logs/version_1/checkpoints"
     out_path = "/root/autodl-tmp/kaggle/anomaly/pcb2_preds"
     for filename in os.listdir(out_path):
         os.remove(os.path.join(out_path, filename))  # clear folder first
@@ -297,7 +199,7 @@ def test_pcb_simple_unsupervised():
     test_filenames += anomaly_filenames
     test_images += all_images
 
-    h, w = (192, 224)
+    h, w = (296, 488)
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
         Resized(spatial_size=(h, w), size_mode='all', keys="image"),
@@ -334,7 +236,15 @@ def test_pcb_simple_unsupervised():
     result_anomaly = result.loc[anomaly_filenames]
     result.sort_values(inplace=True)
     print(result)
-    import pdb; pdb.set_trace()
+    n = len(result)
+    invpairs = 0
+    anomalies = 0
+    for i in result.index:
+        if len(i.split(".")[0]) == 3:
+            anomalies += 1
+        else:
+            invpairs += anomalies
+    print(f"number of inv pairs: {invpairs} / {anomalies * (n - anomalies)}")
 
 
 def get_supervised_pcb_loaders(samples):
@@ -342,7 +252,7 @@ def get_supervised_pcb_loaders(samples):
 
     transforms = Compose([
         NormalizeIntensityd(keys="image"),
-        Resized(spatial_size=(192, 224), size_mode='all', keys="image"),
+        Resized(spatial_size=(296, 488), size_mode='all', keys="image"),
     ])
     ds = Dataset(data=samples, transform=transforms)
 
