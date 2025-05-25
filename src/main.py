@@ -148,7 +148,7 @@ def get_pcb_loaders(train_images, valid_images, use_mask):
 
 
 def train_pcb_simple_unsupervised():
-    NUM_EPOCH = 20
+    NUM_EPOCH = 100
 
     _, all_images = get_pcb_images(normal=True)
     n = len(all_images)
